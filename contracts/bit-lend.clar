@@ -1,12 +1,20 @@
-;; Bitcoin-Backed Lending Platform Smart Contract
+;; SatoshiLend: Bitcoin-Backed Lending Platform
+;; A decentralized lending platform allowing users to take loans using Bitcoin as collateral
 
-;; Errors
+;; Constants
+(define-constant CONTRACT-OWNER tx-sender)
 (define-constant ERR-INSUFFICIENT-FUNDS (err u100))
 (define-constant ERR-UNAUTHORIZED (err u101))
 (define-constant ERR-LOAN-NOT-FOUND (err u102))
 (define-constant ERR-LOAN-ALREADY-EXISTS (err u103))
 (define-constant ERR-LOAN-REPAYMENT-FAILED (err u104))
 (define-constant ERR-LIQUIDATION-NOT-ALLOWED (err u105))
+(define-constant ERR-INVALID-PARAMETER (err u106))
+
+;; Maximum values to prevent overflow
+(define-constant MAX-INTEREST-RATE u10000) ;; 100.00%
+(define-constant MAX-LOAN-DURATION u52560) ;; Approximately 1 year in blocks
+(define-constant MAX-UINT u340282366920938463463374607431768211455)
 
 ;; Data Maps
 (define-map loans 
@@ -37,26 +45,63 @@
 ;; Variables
 (define-data-var next-loan-id uint u0)
 
-;; Get Loan Details
+;; Internal Functions
+(define-private (validate-loan-parameters 
+    (collateral-amount uint)
+    (loan-amount uint)
+    (interest-rate uint)
+    (loan-duration uint)
+  )
+  (and
+    (> collateral-amount u0)
+    (<= collateral-amount MAX-UINT)
+    (> loan-amount u0)
+    (<= loan-amount MAX-UINT)
+    (<= interest-rate MAX-INTEREST-RATE)
+    (> loan-duration u0)
+    (<= loan-duration MAX-LOAN-DURATION)
+  )
+)
+
+;; Read-only Functions
 (define-read-only (get-loan-details (loan-id uint) (borrower principal))
   (map-get? loans {loan-id: loan-id, borrower: borrower})
 )
 
-;; Create Loan
-(define-public (create-loan 
-  (collateral-amount uint)
-  (loan-amount uint)
-  (interest-rate uint)
-  (loan-duration uint)
+(define-read-only (get-loan-repayment-status (loan-id uint) (borrower principal))
+  (map-get? loan-repayments {loan-id: loan-id, borrower: borrower})
 )
+
+;; Public Functions
+(define-public (create-loan 
+    (collateral-amount uint)
+    (loan-amount uint)
+    (interest-rate uint)
+    (loan-duration uint)
+  )
   (let 
     (
       (current-loan-id (var-get next-loan-id))
       (new-loan-id (+ current-loan-id u1))
     )
     ;; Validate loan parameters
-    (asserts! (> collateral-amount u0) ERR-INSUFFICIENT-FUNDS)
-    (asserts! (> loan-amount u0) ERR-INSUFFICIENT-FUNDS)
+    (asserts! 
+      (validate-loan-parameters 
+        collateral-amount 
+        loan-amount 
+        interest-rate 
+        loan-duration
+      ) 
+      ERR-INVALID-PARAMETER
+    )
+    
+    ;; Check if loan already exists
+    (asserts! 
+      (is-none 
+        (map-get? loans {loan-id: new-loan-id, borrower: tx-sender})
+      ) 
+      ERR-LOAN-ALREADY-EXISTS
+    )
     
     ;; Create loan entry
     (map-set loans 
@@ -79,7 +124,6 @@
   )
 )
 
-;; Repay Loan
 (define-public (repay-loan (loan-id uint))
   (let 
     (
@@ -87,11 +131,12 @@
         (map-get? loans {loan-id: loan-id, borrower: tx-sender}) 
         ERR-LOAN-NOT-FOUND
       ))
-      (current-repayments (default-to {total-repaid: u0} 
+      (current-repayments (default-to 
+        {total-repaid: u0} 
         (map-get? loan-repayments {loan-id: loan-id, borrower: tx-sender})
       ))
     )
-    ;; Validate loan is active
+    ;; Validate loan exists and is active
     (asserts! (get is-active loan) ERR-UNAUTHORIZED)
     
     ;; Calculate total repayment amount with interest
@@ -102,6 +147,9 @@
           (/ (* (get loan-amount loan) (get interest-rate loan)) u100)
         ))
       )
+      ;; Validate repayment amount doesn't overflow
+      (asserts! (<= total-repayment MAX-UINT) ERR-LOAN-REPAYMENT-FAILED)
+      
       ;; Update loan status
       (map-set loans 
         {loan-id: loan-id, borrower: tx-sender}
@@ -119,7 +167,6 @@
   )
 )
 
-;; Liquidate Loan
 (define-public (liquidate-loan (loan-id uint))
   (let 
     (
@@ -128,6 +175,9 @@
         ERR-LOAN-NOT-FOUND
       ))
     )
+    ;; Validate loan exists
+    (asserts! (get is-active loan) ERR-UNAUTHORIZED)
+    
     ;; Check if loan is past due
     (asserts! 
       (> (- block-height (get loan-start-block loan)) 
