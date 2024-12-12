@@ -124,6 +124,38 @@
   )
 )
 
+(define-public (add-collateral (loan-id uint) (additional-amount uint))
+  (let
+    (
+      (loan (unwrap! 
+        (map-get? loans {loan-id: loan-id, borrower: tx-sender}) 
+        ERR-LOAN-NOT-FOUND
+      ))
+    )
+    ;; Validate loan exists and is active
+    (asserts! (get is-active loan) ERR-UNAUTHORIZED)
+    
+    ;; Validate additional collateral amount
+    (asserts! (> additional-amount u0) ERR-INVALID-PARAMETER)
+    
+    ;; Check that new total collateral won't overflow
+    (let
+      (
+        (new-collateral-amount (+ (get collateral-amount loan) additional-amount))
+      )
+      (asserts! (<= new-collateral-amount MAX-UINT) ERR-INVALID-PARAMETER)
+      
+      ;; Update loan with new collateral amount
+      (map-set loans 
+        {loan-id: loan-id, borrower: tx-sender}
+        (merge loan {collateral-amount: new-collateral-amount})
+      )
+      
+      (ok new-collateral-amount)
+    )
+  )
+)
+
 (define-public (repay-loan (loan-id uint))
   (let 
     (
