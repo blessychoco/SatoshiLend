@@ -10,11 +10,13 @@
 (define-constant ERR-LOAN-REPAYMENT-FAILED (err u104))
 (define-constant ERR-LIQUIDATION-NOT-ALLOWED (err u105))
 (define-constant ERR-INVALID-PARAMETER (err u106))
+(define-constant ERR-INSUFFICIENT-COLLATERAL (err u107))
 
 ;; Maximum values to prevent overflow
 (define-constant MAX-INTEREST-RATE u10000) ;; 100.00%
 (define-constant MAX-LOAN-DURATION u52560) ;; Approximately 1 year in blocks
 (define-constant MAX-UINT u340282366920938463463374607431768211455)
+(define-constant COLLATERAL-RATIO u150) ;; 150% minimum collateralization ratio
 
 ;; Data Maps
 (define-map loans 
@@ -61,6 +63,11 @@
     (> loan-duration u0)
     (<= loan-duration MAX-LOAN-DURATION)
   )
+)
+
+;; Calculate minimum required collateral for a loan
+(define-private (calculate-min-collateral (loan-amount uint))
+  (/ (* loan-amount COLLATERAL-RATIO) u100)
 )
 
 ;; Read-only Functions
@@ -152,6 +159,41 @@
       )
       
       (ok new-collateral-amount)
+    )
+  )
+)
+
+(define-public (withdraw-collateral (loan-id uint) (withdraw-amount uint))
+  (let
+    (
+      (loan (unwrap! 
+        (map-get? loans {loan-id: loan-id, borrower: tx-sender}) 
+        ERR-LOAN-NOT-FOUND
+      ))
+    )
+    ;; Validate loan exists and is active
+    (asserts! (get is-active loan) ERR-UNAUTHORIZED)
+    
+    ;; Validate withdrawal amount
+    (asserts! (> withdraw-amount u0) ERR-INVALID-PARAMETER)
+    (asserts! (<= withdraw-amount (get collateral-amount loan)) ERR-INSUFFICIENT-FUNDS)
+    
+    ;; Calculate new collateral amount after withdrawal
+    (let
+      (
+        (new-collateral-amount (- (get collateral-amount loan) withdraw-amount))
+        (min-required-collateral (calculate-min-collateral (get loan-amount loan)))
+      )
+      ;; Ensure remaining collateral meets minimum requirement
+      (asserts! (>= new-collateral-amount min-required-collateral) ERR-INSUFFICIENT-COLLATERAL)
+      
+      ;; Update loan with new collateral amount
+      (map-set loans 
+        {loan-id: loan-id, borrower: tx-sender}
+        (merge loan {collateral-amount: new-collateral-amount})
+      )
+      
+      (ok withdraw-amount)
     )
   )
 )
