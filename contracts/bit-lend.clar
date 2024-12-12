@@ -65,6 +65,16 @@
   )
 )
 
+;; Validate loan ID exists and belongs to the borrower
+(define-private (validate-loan-ownership (loan-id uint))
+  (is-some 
+    (map-get? loans {
+      loan-id: loan-id, 
+      borrower: tx-sender
+    })
+  )
+)
+
 ;; Calculate minimum required collateral for a loan
 (define-private (calculate-min-collateral (loan-amount uint))
   (/ (* loan-amount COLLATERAL-RATIO) u100)
@@ -110,6 +120,12 @@
       ERR-LOAN-ALREADY-EXISTS
     )
     
+    ;; Validate collateral amount
+    (asserts! 
+      (>= collateral-amount (calculate-min-collateral loan-amount)) 
+      ERR-INSUFFICIENT-COLLATERAL
+    )
+    
     ;; Create loan entry
     (map-set loans 
       {loan-id: new-loan-id, borrower: tx-sender}
@@ -134,12 +150,18 @@
 (define-public (add-collateral (loan-id uint) (additional-amount uint))
   (let
     (
+      ;; Validate loan ownership first
+      (loan-exists (asserts! 
+        (validate-loan-ownership loan-id) 
+        ERR-UNAUTHORIZED
+      ))
+      
       (loan (unwrap! 
         (map-get? loans {loan-id: loan-id, borrower: tx-sender}) 
         ERR-LOAN-NOT-FOUND
       ))
     )
-    ;; Validate loan exists and is active
+    ;; Validate loan is active
     (asserts! (get is-active loan) ERR-UNAUTHORIZED)
     
     ;; Validate additional collateral amount
@@ -166,6 +188,12 @@
 (define-public (withdraw-collateral (loan-id uint) (withdraw-amount uint))
   (let
     (
+      ;; Validate loan ownership first
+      (loan-exists (asserts! 
+        (validate-loan-ownership loan-id) 
+        ERR-UNAUTHORIZED
+      ))
+      
       (loan (unwrap! 
         (map-get? loans {loan-id: loan-id, borrower: tx-sender}) 
         ERR-LOAN-NOT-FOUND
@@ -201,6 +229,12 @@
 (define-public (repay-loan (loan-id uint))
   (let 
     (
+      ;; Validate loan ownership first
+      (loan-exists (asserts! 
+        (validate-loan-ownership loan-id) 
+        ERR-UNAUTHORIZED
+      ))
+      
       (loan (unwrap! 
         (map-get? loans {loan-id: loan-id, borrower: tx-sender}) 
         ERR-LOAN-NOT-FOUND
@@ -244,6 +278,12 @@
 (define-public (liquidate-loan (loan-id uint))
   (let 
     (
+      ;; Validate loan ownership first
+      (loan-exists (asserts! 
+        (validate-loan-ownership loan-id) 
+        ERR-UNAUTHORIZED
+      ))
+      
       (loan (unwrap! 
         (map-get? loans {loan-id: loan-id, borrower: tx-sender}) 
         ERR-LOAN-NOT-FOUND
